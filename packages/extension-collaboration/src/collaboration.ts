@@ -175,37 +175,36 @@ export const Collaboration = Extension.create<CollaborationOptions, Collaboratio
     const yUndoPluginInstance = yUndoPlugin(this.options.yUndoOptions)
     const originalUndoPluginView = yUndoPluginInstance.spec.view
 
+    // Set before view.destroy() runs, so plugin view callbacks can check it.
+    let editorIsDestroyed = false
+
+    this.editor.on('destroy', () => {
+      editorIsDestroyed = true
+    })
+
     yUndoPluginInstance.spec.view = (view: EditorView) => {
       const { undoManager } = yUndoPluginKey.getState(view.state)
-
-      if (undoManager.restore) {
-        undoManager.restore()
-        undoManager.restore = () => {
-          // noop
-        }
-      }
 
       const viewRet = originalUndoPluginView ? originalUndoPluginView(view) : undefined
 
       return {
         destroy: () => {
-          const hasUndoManSelf = undoManager.trackedOrigins.has(undoManager)
-          // eslint-disable-next-line no-underscore-dangle
-          const observers = undoManager._observers
-
-          undoManager.restore = () => {
-            if (hasUndoManSelf) {
-              undoManager.trackedOrigins.add(undoManager)
-            }
-
-            undoManager.doc.on('afterTransaction', undoManager.afterTransactionHandler)
-            // eslint-disable-next-line no-underscore-dangle
-            undoManager._observers = observers
-          }
+          const hadSelf = undoManager.trackedOrigins.has(undoManager)
+          const { afterTransactionHandler } = undoManager
 
           if (viewRet?.destroy) {
             viewRet.destroy()
           }
+
+          if (editorIsDestroyed) {
+            return
+          }
+
+          // Re-attach tx tracking so nothing is lost before the next view()
+          if (hadSelf) {
+            undoManager.trackedOrigins.add(undoManager)
+          }
+          undoManager.doc.on('afterTransaction', afterTransactionHandler)
         },
       }
     }
